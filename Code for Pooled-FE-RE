@@ -1,0 +1,113 @@
+from linearmodels import PooledOLS
+import statsmodels.api as sm
+
+df_1 = pd.read_excel ('/Users/isupport/Desktop/4 курс/Диплом/Panel.xlsx', sheet_name='work')
+df_1["ITControl"] = df_1["IT"]*df_1["Control"]
+df_1["ITAccount"] = df_1["IT"]*df_1["Account_ofgov"]
+df_1["IT_Control_Account"] = df_1["ITControl"]*df_1["Account_ofgov"]
+df_1 = df_1.replace('..', np.nan)
+df_2 = df_1.fillna(0).set_index(["CountryName","Year"])
+
+# Perform PooledOLS
+exog = sm.tools.tools.add_constant(df_2[['IT', 'MT', 'ERT', 'Control', 'ITControl', 'ln_Pop', 'lnv_in_GDP', 'Account_ofgov', 'IT_Control_Account']])
+endog = df_2['ln_GDP']
+mod = PooledOLS(endog, exog)
+pooledOLS_res = mod.fit(cov_type='clustered', cluster_entity=True)
+# Store values for checking homoskedasticity graphically
+fittedvals_pooled_OLS = pooledOLS_res.predict().fitted_values
+residuals_pooled_OLS = pooledOLS_res.resids
+
+# 3A. Homoskedasticity
+import matplotlib.pyplot as plt
+ # 3A.1 Residuals-Plot for growing Variance Detection
+fig, ax = plt.subplots()
+ax.scatter(fittedvals_pooled_OLS, residuals_pooled_OLS, color = 'blue')
+ax.axhline(0, color = 'r', ls = '--')
+ax.set_xlabel('Predicted Values', fontsize = 15)
+ax.set_ylabel('Residuals', fontsize = 15)
+ax.set_title('Homoskedasticity Test', fontsize = 20)
+plt.show()
+
+'По сути, график остатков представляет прогнозируемые значения (ось x) в сравнении с остатками (ось y). 
+Если нанесенные на график точки данных разбросаны, это показатель растущей дисперсии и, следовательно, гетероскедастичности. 
+По графику видно, что скорее всего гетероскедастичности нет, так как точки данных сгруппированы около нуля
+Но проверим это с помощью теста Уайта и теста Брейша-Пагана:'
+
+years = df_2.index.get_level_values('Year').to_list()
+df_2['Year'] = pd.Categorical(years)
+
+# 3A.2 White-Test
+from statsmodels.stats.diagnostic import het_white, het_breuschpagan
+pooled_OLS_dataset = pd.concat([df_2, residuals_pooled_OLS], axis=1)
+pooled_OLS_dataset = pooled_OLS_dataset.drop(['Year'], axis = 1).fillna(0)
+exog = sm.tools.tools.add_constant(df_2[['IT', 'MT', 'ERT', 'Control', 'ITControl', 'ln_Pop', 'lnv_in_GDP', 'Account_ofgov', 'IT_Control_Account']]).fillna(0)
+white_test_results = het_white(pooled_OLS_dataset['residual'], exog)
+labels = ['LM-Stat', 'LM p-val', 'F-Stat', 'F p-val'] 
+print(dict(zip(labels, white_test_results)))
+# 3A.3 Breusch-Pagan-Test
+breusch_pagan_test_results = het_breuschpagan(pooled_OLS_dataset['residual'], exog)
+labels = ['LM-Stat', 'LM p-val', 'F-Stat', 'F p-val'] 
+print(dict(zip(labels, breusch_pagan_test_results)))
+
+'
+{'LM-Stat': 103.97127943926203, 'LM p-val': 2.8380977588616306e-09, 'F-Stat': 3.263523176597185, 'F p-val': 1.5194684308782108e-09}
+{'LM-Stat': 45.46172575929378, 'LM p-val': 7.578268773716294e-07, 'F-Stat': 5.140353077652124, 'F p-val': 6.486396164068109e-07}
+Оба теста дают малое p-value (p-value<0,05 и меньше любого используемого в тестах уровня значимости 1% и 10%).
+
+В тесте Уайта проверяется нулевая гипотеза об отсутствии гетероскедастичности (то есть ошибки модели предполагаются гомоскедастичными — с постоянной дисперсией). В таком случае вспомогательная регрессия должна быть незначимой. Таким образом нулевая гипотеза об отсутствии гетероскедастичности отвергается
+
+В тесте Бреуша-Пагана проверяется линейная зависимость дисперсии случайных ошибок от некоторого набора переменных, и также как и с тестом Уайта нулевая гипотеза отвергается
+
+Можно сделать вывод, что гетероскетастичность в остатках присутствует наличие гетероскедастичности случайных ошибок приводит к неэффективности оценок, полученных с помощью метода наименьших квадратов. Кроме того, в этом случае оказывается смещённой и несостоятельной классическая оценка ковариационной матрицы МНК-оценок параметров. Следовательно, статистические выводы о качестве полученных оценок могут быть неадекватными. В связи с этим тестирование моделей на гетероскедастичность является одной из необходимых процедур при построении регрессионных моделей.'
+
+# 3.B Non-Autocorrelation
+# Durbin-Watson-Test
+from statsmodels.stats.stattools import durbin_watson
+
+durbin_watson_test_results = durbin_watson(pooled_OLS_dataset['residual']) 
+print(durbin_watson_test_results)
+
+'0.5999393540638678
+Тест Дарбина-Ватсона будет иметь один результат в диапазоне от 0 до 4. Среднее значение (= 2) будет означать, что автокорреляция не выявлена, 0 – 2 означает положительную автокорреляцию (чем ближе к нулю, тем выше корреляция), а 2 – 4 означает отрицательную автокорреляцию (чем ближе к четырем, тем выше корреляция). В нашем примере результат равен 0,5999393540638678, что явно указывает на сильную положительную автокорреляцию.'
+
+# FE und RE model
+from linearmodels import PanelOLS
+from linearmodels import RandomEffects
+exog = sm.tools.tools.add_constant(df_2[['IT', 'MT', 'ERT', 'Control', 'ITControl', 'ln_Pop', 'lnv_in_GDP', 'Account_ofgov', 'IT_Control_Account']])
+endog = df_2['ln_GDP']
+# random effects model
+model_re = RandomEffects(endog, exog) 
+re_res = model_re.fit() 
+# fixed effects model
+model_fe = PanelOLS(endog, exog, entity_effects = True) 
+fe_res = model_fe.fit() 
+#print results
+print(re_res)
+print(fe_res)
+
+import numpy.linalg as la
+from scipy import stats
+import numpy as np
+
+def hausman(fe, re):
+    b = fe.params
+    B = re.params
+    v_b = fe.cov
+    v_B = re.cov
+    df = b[np.abs(b) < 1e8].size
+    chi2 = np.dot((b - B).T, la.inv(v_b - v_B).dot(b - B)) 
+    pval = stats.chi2.sf(chi2, df)
+    return chi2, df, pval
+
+hausman_results = hausman(fe_res, re_res) 
+print('chi-Squared: ' + str(hausman_results[0]))
+print('degrees of freedom: ' + str(hausman_results[1]))
+print('p-Value: ' + str(hausman_results[2]))
+
+'
+chi-Squared: 68.90267857598215
+degrees of freedom: 10
+p-Value: 7.218405365171597e-11
+Нулевая гипотеза заключается в том, что факторы модели экзогенны, альтернатива — что эндогенны. В обоих случаях метод инструментальных переменных дает состоятельные оценки (инструменты по определению предполагаются экзогенными). А метод наименьших квадратов дает состоятельные оценки только при экзогенности факторов. Таким образом, если нулевая гипотеза выполнена, то оценки разных методов асимптотически эквиваленты, в противном случае различия между ними будут значимыми. Тем самым тест позволяет оценить экзогенность факторов модели.
+
+Поскольку p-значение очень мало (7.218405365171597e-11), нулевую гипотезу об экзогенности факторов можно отвергнуть. Соответственно, FE-модель наиболее подходящит, потому что в нашей модели явно присутствует эндогенность.'
